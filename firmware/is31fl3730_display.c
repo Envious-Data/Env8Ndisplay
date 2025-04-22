@@ -1,0 +1,367 @@
+// is31fl3730_display.c
+#include "is31fl3730_display.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include "hardware/gpio.h"
+#include "hardware/i2c.h"
+#include "pico/stdlib.h"
+#include <math.h>
+#include <stdbool.h>
+
+#define I2C_DISPLAY_LINE i2c1 // Ensure this matches your main.c or project config
+#define I2C_DISPLAY_SDA 14    // GP14 (Updated to match your hardware)
+#define I2C_DISPLAY_SCL 15    // GP15 (Updated to match your hardware)
+
+#define MODE_ADDR 0b00000000
+#define BRIGHTNESS_ADDR  0b00011001   
+#define BRIGHTNESS_VALUE     0b000000100
+#define UPDATE_ADDR 0b00001100
+#define OPTION_ADDR 0b00001101
+#define MATRIX_A_ADDR 0b00001110
+#define MATRIX_B_ADDR 0b00000001
+
+#define DEFAULT_MODE 0b00011000
+#define DEFAULT_OPTIONS 0b00001110
+
+#define count_of(a) (sizeof(a) / sizeof((a)[0]))
+
+uint8_t addresses[4] = {0x60, 0x62, 0x61, 0x63}; // Adjusted for 4 chips
+
+uint8_t displays[8][8] = {{0}};
+
+const int display_map[8] = {
+    6, // Logical 0 -> Physical 6
+    7, // Logical 1 -> Physical 7
+    0, // Logical 2 -> Physical 0
+    1, // Logical 3 -> Physical 1
+    2, // Logical 4 -> Physical 2
+    3, // Logical 5 -> Physical 3
+    4, // Logical 6 -> Physical 4
+    5  // Logical 7 -> Physical 5
+};
+
+// In your is31fl3730_display.c file, perhaps globally:
+uint8_t char_index_map[128] = {0}; // Initialize all to 0 (for space or error)
+
+void populate_char_index_map() {
+    char_index_map[' '] = 0;
+    char_index_map['!'] = 1;
+    char_index_map['"'] = 2;
+    char_index_map['#'] = 3;
+    char_index_map['$'] = 4;
+    char_index_map['%'] = 5;
+    char_index_map['&'] = 6;
+    char_index_map['\''] = 7;
+    char_index_map['('] = 8;
+    char_index_map[')'] = 9;
+    char_index_map['*'] = 10;
+    char_index_map['+'] = 11;
+    char_index_map[','] = 12;
+    char_index_map['-'] = 13;
+    char_index_map['.'] = 14;
+    char_index_map['/'] = 15;
+    char_index_map['0'] = 16;
+    char_index_map['1'] = 17;
+    char_index_map['2'] = 18;
+    char_index_map['3'] = 19;
+    char_index_map['4'] = 20;
+    char_index_map['5'] = 21;
+    char_index_map['6'] = 22;
+    char_index_map['7'] = 23;
+    char_index_map['8'] = 24;
+    char_index_map['9'] = 25;
+    char_index_map[':'] = 26;
+    char_index_map[';'] = 27;
+    char_index_map['<'] = 28;
+    char_index_map['='] = 29;
+    char_index_map['>'] = 30;
+    char_index_map['?'] = 31;
+    char_index_map['@'] = 32;
+    char_index_map['A'] = 33;
+    char_index_map['B'] = 34;
+    char_index_map['C'] = 35;
+    char_index_map['D'] = 36;
+    char_index_map['E'] = 37;
+    char_index_map['F'] = 38;
+    char_index_map['G'] = 39;
+    char_index_map['H'] = 40;
+    char_index_map['I'] = 41;
+    char_index_map['J'] = 42;
+    char_index_map['K'] = 43;
+    char_index_map['L'] = 44;
+    char_index_map['M'] = 45;
+    char_index_map['N'] = 46;
+    char_index_map['O'] = 47;
+    char_index_map['P'] = 48;
+    char_index_map['Q'] = 49;
+    char_index_map['R'] = 50;
+    char_index_map['S'] = 51;
+    char_index_map['T'] = 52;
+    char_index_map['U'] = 53;
+    char_index_map['V'] = 54;
+    char_index_map['W'] = 55;
+    char_index_map['X'] = 56;
+    char_index_map['Y'] = 57;
+    char_index_map['Z'] = 58;
+    char_index_map['a'] = 59;
+    char_index_map['b'] = 60;
+    char_index_map['c'] = 61;
+    char_index_map['d'] = 62;
+    char_index_map['e'] = 63;
+    char_index_map['f'] = 64;
+    char_index_map['g'] = 65;
+    char_index_map['h'] = 66;
+    char_index_map['i'] = 67;
+    char_index_map['j'] = 68;
+    char_index_map['k'] = 69;
+    char_index_map['l'] = 70;
+    char_index_map['m'] = 71;
+    char_index_map['n'] = 72;
+    char_index_map['o'] = 73;
+    char_index_map['p'] = 74;
+    char_index_map['q'] = 75;
+    char_index_map['r'] = 76;
+    char_index_map['s'] = 77;
+    char_index_map['t'] = 78;
+    char_index_map['u'] = 79;
+    char_index_map['v'] = 80;
+    char_index_map['w'] = 81;
+    char_index_map['x'] = 82;
+    char_index_map['y'] = 83;
+    char_index_map['z'] = 84;
+}
+
+uint8_t characters[][8] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // (space)
+    {0x00, 0x00, 0x5f, 0x00, 0x00, 0x00, 0x00, 0x00},  // !
+    {0x00, 0x07, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00},  // "
+    {0x14, 0x7f, 0x14, 0x7f, 0x14, 0x00, 0x00, 0x00},  // #
+    {0x24, 0x2a, 0x7f, 0x2a, 0x12, 0x00, 0x00, 0x00},  // $
+    {0x23, 0x13, 0x08, 0x64, 0x62, 0x00, 0x00, 0x00},  // %
+    {0x36, 0x49, 0x55, 0x22, 0x50, 0x00, 0x00, 0x00},  // &
+    {0x00, 0x05, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00},  // '
+    {0x00, 0x1c, 0x22, 0x41, 0x00, 0x00, 0x00, 0x00},  // (
+    {0x00, 0x41, 0x22, 0x1c, 0x00, 0x00, 0x00, 0x00},  // )
+    {0x08, 0x2a, 0x1c, 0x2a, 0x08, 0x00, 0x00, 0x00},  // *
+    {0x08, 0x08, 0x3e, 0x08, 0x08, 0x00, 0x00, 0x00},  // +
+    {0x00, 0x50, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00},  // ,
+    {0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x00},  // -
+    {0x00, 0x60, 0x60, 0x00, 0x00, 0x00, 0x00, 0x00},  // .
+    {0x20, 0x10, 0x08, 0x04, 0x02, 0x00, 0x00, 0x00},  // /
+    {0x3e, 0x51, 0x49, 0x45, 0x3e, 0x00, 0x00, 0x00},  // 0
+    {0x00, 0x42, 0x7f, 0x40, 0x00, 0x00, 0x00, 0x00},  // 1
+    {0x42, 0x61, 0x51, 0x49, 0x46, 0x00, 0x00, 0x00},  // 2
+    {0x21, 0x41, 0x45, 0x4b, 0x31, 0x00, 0x00, 0x00},  // 3
+    {0x18, 0x14, 0x12, 0x7f, 0x10, 0x00, 0x00, 0x00},  // 4
+    {0x27, 0x45, 0x45, 0x45, 0x39, 0x00, 0x00, 0x00},  // 5
+    {0x3c, 0x4a, 0x49, 0x49, 0x30, 0x00, 0x00, 0x00},  // 6
+    {0x01, 0x71, 0x09, 0x05, 0x03, 0x00, 0x00, 0x00},  // 7
+    {0x36, 0x49, 0x49, 0x49, 0x36, 0x00, 0x00, 0x00},  // 8
+    {0x06, 0x49, 0x49, 0x29, 0x1e, 0x00, 0x00, 0x00},  // 9
+    {0x00, 0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00},  // :
+    {0x00, 0x56, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00},  // ;
+    {0x00, 0x08, 0x14, 0x22, 0x41, 0x00, 0x00, 0x00},  // <
+    {0x14, 0x14, 0x14, 0x14, 0x14, 0x00, 0x00, 0x00},  // =
+    {0x41, 0x22, 0x14, 0x08, 0x00, 0x00, 0x00, 0x00},  // >
+    {0x02, 0x01, 0x51, 0x09, 0x06, 0x00, 0x00, 0x00},  // ?
+    {0x32, 0x49, 0x79, 0x41, 0x3e, 0x00, 0x00, 0x00},  // @
+    {0x7e, 0x11, 0x11, 0x11, 0x7e, 0x00, 0x00, 0x00},  // A
+    {0x7f, 0x49, 0x49, 0x49, 0x36, 0x00, 0x00, 0x00},  // B
+    {0x3e, 0x41, 0x41, 0x41, 0x22, 0x00, 0x00, 0x00},  // C
+    {0x7f, 0x41, 0x41, 0x22, 0x1c, 0x00, 0x00, 0x00},  // D
+    {0x7f, 0x49, 0x49, 0x49, 0x41, 0x00, 0x00, 0x00},  // E
+    {0x7f, 0x09, 0x09, 0x01, 0x01, 0x00, 0x00, 0x00},  // F
+    {0x3e, 0x41, 0x41, 0x51, 0x32, 0x00, 0x00, 0x00},  // G
+    {0x7f, 0x08, 0x08, 0x08, 0x7f, 0x00, 0x00, 0x00},  // H
+    {0x00, 0x41, 0x7f, 0x41, 0x00, 0x00, 0x00, 0x00},  // I
+    {0x20, 0x40, 0x41, 0x3f, 0x01, 0x00, 0x00, 0x00},  // J
+    {0x7f, 0x08, 0x14, 0x22, 0x41, 0x00, 0x00, 0x00},  // K
+    {0x7f, 0x40, 0x40, 0x40, 0x40, 0x00, 0x00, 0x00},  // L
+    {0x7f, 0x02, 0x04, 0x02, 0x7f, 0x00, 0x00, 0x00},  // M
+    {0x7f, 0x04, 0x08, 0x10, 0x7f, 0x00, 0x00, 0x00},  // N
+    {0x3e, 0x41, 0x41, 0x41, 0x3e, 0x00, 0x00, 0x00},  // O
+    {0x7f, 0x09, 0x09, 0x09, 0x06, 0x00, 0x00, 0x00},  // P
+    {0x3e, 0x41, 0x51, 0x21, 0x5e, 0x00, 0x00, 0x00},  // Q
+    {0x7f, 0x09, 0x19, 0x29, 0x46, 0x00, 0x00, 0x00},  // R
+    {0x46, 0x49, 0x49, 0x49, 0x31, 0x00, 0x00, 0x00},  // S
+    {0x01, 0x01, 0x7f, 0x01, 0x01, 0x00, 0x00, 0x00},  // T
+    {0x3f, 0x40, 0x40, 0x40, 0x3f, 0x00, 0x00, 0x00},  // U
+    {0x1f, 0x20, 0x40, 0x20, 0x1f, 0x00, 0x00, 0x00},  // V
+    {0x7f, 0x20, 0x18, 0x20, 0x7f, 0x00, 0x00, 0x00},  // W
+    {0x63, 0x14, 0x08, 0x14, 0x63, 0x00, 0x00, 0x00},  // X
+    {0x03, 0x04, 0x78, 0x04, 0x03, 0x00, 0x00, 0x00},  // Y
+    {0x61, 0x51, 0x49, 0x45, 0x43, 0x00, 0x00, 0x00},  // Z
+	{0x26, 0x49, 0x49, 0x49, 0x38, 0x00, 0x00, 0x00},  // a
+    {0x7f, 0x48, 0x44, 0x44, 0x38, 0x00, 0x00, 0x00},  // b
+    {0x38, 0x44, 0x44, 0x44, 0x20, 0x00, 0x00, 0x00},  // c
+    {0x38, 0x44, 0x44, 0x48, 0x7f, 0x00, 0x00, 0x00},  // d
+    {0x38, 0x44, 0x44, 0x44, 0x38, 0x00, 0x00, 0x00},  // e
+    {0x04, 0x7e, 0x05, 0x05, 0x01, 0x00, 0x00, 0x00},  // f
+    {0x18, 0x24, 0x24, 0x3f, 0x24, 0x24, 0x18, 0x00},  // g
+    {0x7f, 0x08, 0x04, 0x04, 0x78, 0x00, 0x00, 0x00},  // h
+    {0x00, 0x41, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00},  // i
+    {0x20, 0x40, 0x7d, 0x00, 0x00, 0x00, 0x00, 0x00},  // j
+    {0x7f, 0x10, 0x08, 0x04, 0x7f, 0x00, 0x00, 0x00},  // k
+    {0x00, 0x7f, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00},  // l
+    {0x7c, 0x04, 0x18, 0x04, 0x78, 0x00, 0x00, 0x00},  // m
+    {0x7c, 0x04, 0x04, 0x04, 0x78, 0x00, 0x00, 0x00},  // n
+    {0x38, 0x44, 0x44, 0x44, 0x38, 0x00, 0x00, 0x00},  // o
+    {0x7c, 0x14, 0x14, 0x14, 0x08, 0x00, 0x00, 0x00},  // p
+    {0x08, 0x14, 0x14, 0x7c, 0x14, 0x14, 0x08, 0x00},  // q
+    {0x7c, 0x08, 0x04, 0x04, 0x04, 0x00, 0x00, 0x00},  // r
+    {0x48, 0x54, 0x54, 0x24, 0x08, 0x00, 0x00, 0x00},  // s
+    {0x04, 0x3e, 0x44, 0x04, 0x04, 0x00, 0x00, 0x00},  // t
+    {0x3c, 0x40, 0x40, 0x40, 0x3c, 0x00, 0x00, 0x00},  // u
+    {0x1c, 0x20, 0x40, 0x20, 0x1c, 0x00, 0x00, 0x00},  // v
+    {0x3c, 0x40, 0x30, 0x40, 0x3c, 0x00, 0x00, 0x00},  // w
+    {0x44, 0x28, 0x10, 0x28, 0x44, 0x00, 0x00, 0x00},  // x
+    {0x10, 0x28, 0x7c, 0x28, 0x10, 0x00, 0x00, 0x00},  // y
+    {0x44, 0x64, 0x54, 0x4c, 0x44, 0x00, 0x00, 0x00}   // z
+};
+
+uint8_t alternate_characters[count_of(characters)][8];
+
+void convertLeftToRight(const uint8_t *left_matrix, uint8_t *right_matrix) {
+    for (int row = 0; row < 8; row++) {
+        for (int col = 0; col < 8; col++) {
+            uint8_t bit_value = (left_matrix[row] >> (col)) & 1;
+            right_matrix[col] |= (bit_value << row);
+        }
+    }
+}
+
+void pre_generate_alternate_characters() {
+    for (int i = 0; i < count_of(characters); i++) {
+        convertLeftToRight(characters[i], alternate_characters[i]);
+    }
+}
+
+static void set_option(int chip_index, uint8_t address, uint8_t value) {
+    if (chip_index < 0 || chip_index > 3) return;
+
+    uint8_t buf[2];
+    buf[0] = address;
+    buf[1] = value;
+
+    i2c_write_timeout_us(I2C_DISPLAY_LINE, addresses[chip_index], buf, count_of(buf), false, 1000);
+}
+
+void init_display() {
+    i2c_init(I2C_DISPLAY_LINE, 100 * 1000);
+    gpio_set_function(I2C_DISPLAY_SDA, GPIO_FUNC_I2C);
+    gpio_set_function(I2C_DISPLAY_SCL, GPIO_FUNC_I2C);
+
+    // Add this line - critical for alternate displays
+    pre_generate_alternate_characters();
+	populate_char_index_map();
+
+    for (int i = 0; i < count_of(addresses); i++) {
+        set_option(i, MODE_ADDR, DEFAULT_MODE);
+        set_option(i, OPTION_ADDR, DEFAULT_OPTIONS);
+        set_option(i, BRIGHTNESS_ADDR, BRIGHTNESS_VALUE);
+    }
+}
+
+
+void update_display() {
+    for (int i = 0; i < count_of(addresses); i++) {
+        uint8_t buf_a[9] = {MATRIX_A_ADDR};
+        memcpy(buf_a + 1, displays[i * 2], 8);
+        i2c_write_timeout_us(I2C_DISPLAY_LINE, addresses[i], buf_a, count_of(buf_a), false, 1000);
+
+        uint8_t buf_b[9] = {MATRIX_B_ADDR};
+        memcpy(buf_b + 1, displays[i * 2 + 1], 8);
+        i2c_write_timeout_us(I2C_DISPLAY_LINE, addresses[i], buf_b, count_of(buf_b), false, 1000);
+
+        set_option(i, UPDATE_ADDR, 0b00000001);
+    }
+}
+
+void transform_buffer_for_display(char letter, int display, uint8_t *buffer) {
+    uint8_t char_index = 0; // Default to 0 (space)
+
+    if (letter >= 0 && letter < 128) {
+        char_index = char_index_map[(int)letter];
+    }
+
+    for (int i = 0; i < 8; i++) {
+        if (display % 2 == 0) {
+            buffer[i] = characters[char_index][i];
+        } else {
+            buffer[i] = alternate_characters[char_index][i];
+        }
+    }
+}
+
+void set_char(int display_index, char letter, bool update) {
+    // Map the logical display index to the physical one
+    int physical_index = display_map[display_index];
+
+    if (physical_index < 0 || physical_index > 7) return;
+    uint8_t char_buffer[8];
+    transform_buffer_for_display(letter, physical_index, char_buffer);
+    for (int i = 0; i < 8; i++) {
+        displays[physical_index][i] = char_buffer[i];
+    }
+    if (update) update_display();
+}
+
+void scroll_display_string(const char *string) {
+    size_t len = strlen(string);
+    char *scroll_str = append_chars(string, ' ', 8);
+    size_t scroll_len = strlen(scroll_str);
+
+    clear_all(false);
+
+    if (scroll_len > 8) {
+        for (size_t i = 0; i <= scroll_len - 8; i++) {
+            for (int display = 0; display < 8; display++) {
+                char char_to_display = scroll_str[i + display];
+                set_char(display, char_to_display, false);
+            }
+            update_display();
+            sleep_ms(250);
+        }
+        sleep_ms(1000);
+    } else {
+        display_string(string);
+        sleep_ms(1000);
+    }
+    free(scroll_str);
+    clear_all(true);
+}
+
+void display_string(const char *string) {
+    clear_all(false);
+    size_t len = strlen(string);
+    for (size_t i = 0; i < 8; i++) {
+        if (i < len) {
+            set_char(i, string[i], false);
+        } else {
+            set_char(i, ' ', false);
+        }
+    }
+    update_display();
+}
+
+void clear_all(bool update) {
+    for (int i = 0; i < count_of(displays); i++) {
+        for (int j = 0; j < 8; j++) {
+            displays[i][j] = 0;
+        }
+    }
+    if (update) update_display();
+}
+
+char *append_chars(const char *original, char character_to_append, size_t num_chars) {
+    size_t original_length = strlen(original);
+    char *new_string = (char *)malloc(original_length + num_chars + 1);
+    if (new_string == NULL) return NULL;
+    strcpy(new_string, original);
+    for (size_t i = 0; i < num_chars; i++) {
+        new_string[original_length + i] = character_to_append;
+    }
+    new_string[original_length + num_chars] = '\0';
+    return new_string;
+}

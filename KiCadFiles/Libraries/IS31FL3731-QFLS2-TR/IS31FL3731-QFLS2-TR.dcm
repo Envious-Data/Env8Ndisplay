@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP IS31FL3731-QFLS2-TR
+D LED Driver 144 Segment 28-Pin QFN EP T/R
+K
+F https://www.lumissil.com/assets/pdf/core/IS31FL3731_DS.pdf
+$ENDCMP
+#
+#End Doc Library
